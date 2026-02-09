@@ -3,7 +3,7 @@ const {
     MessageActionRow,
     MessageButton
 } = require("discord.js");
-const { loadConfig } = require("../../utils/ticketConfig");
+const GuildConfig = require("../../models/GuildConfig");
 
 const PER_PAGE = 5;
 
@@ -13,9 +13,7 @@ module.exports = {
     userPerms: ["ADMINISTRATOR"],
 
     run: async (client, interaction) => {
-        const data = loadConfig();
-        const guildId = interaction.guild.id;
-        const guildData = data.guilds[guildId];
+        const guildData = await GuildConfig.findOne({ guildId: interaction.guild.id });
 
         if (!guildData || !guildData.reasons || guildData.reasons.length === 0) {
             return interaction.reply({
@@ -41,17 +39,11 @@ module.exports = {
             reasons.forEach((r, i) => {
                 embed.addField(
                     `#${start + i + 1} • ${r.label}`,
-                    `**Reason ID:** \`${r.id}\`
-**Description:** ${r.description || "None"}
-**Staff Role(s):** ${
-    r.staffRoles?.length
-        ? r.staffRoles.map(id => `<@&${id}>`).join(", ")
-        : "None"
-}
-**Open Category:** ${r.openCategory ? `<#${r.openCategory}>` : "None"}
-**Close Category:** ${r.closeCategory ? `<#${r.closeCategory}>` : "None"}
-**Transcript Channel:** ${r.transcriptChannel ? `<#${r.transcriptChannel}>` : "None"}
-**Panel Channel:** <#${r.panelChannel}>`
+                    `**ID:** \`${r.id}\`
+**Q:** ${r.question || "Default"}
+**Staff:** ${r.staffRoles?.length ? r.staffRoles.map(id => `<@&${id}>`).join(", ") : "None"}
+**Open Cat:** ${r.openCategory ? `<#${r.openCategory}>` : "None"}
+**Transcript:** ${r.transcriptChannel ? `<#${r.transcriptChannel}>` : "None"}`
                 );
             });
 
@@ -80,8 +72,10 @@ module.exports = {
             fetchReply: true
         });
 
+        if (totalPages === 1) return;
+
         const collector = message.createMessageComponentCollector({
-            time: 5 * 60 * 1000 // 5 minutes
+            time: 5 * 60 * 1000
         });
 
         collector.on("collect", async (btn) => {
@@ -99,12 +93,6 @@ module.exports = {
                 embeds: [buildEmbed(page)],
                 components: [buildRow(page)]
             });
-        });
-
-        collector.on("end", async () => {
-            try {
-                await message.edit({ components: [] });
-            } catch {}
         });
     }
 };

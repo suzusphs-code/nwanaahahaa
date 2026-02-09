@@ -1,4 +1,3 @@
-const sourcebin = require("sourcebin_js");
 const {
   MessageActionRow,
   MessageButton,
@@ -14,7 +13,6 @@ module.exports = {
   async execute(interaction, client) {
     if (!interaction.guild) return;
 
-    /* ================= DROPDOWN TICKET (SHOW MODAL) ================= */
     if (interaction.isSelectMenu() && interaction.customId === "ticket_dropdown") {
       const selectedId = interaction.values[0];
       
@@ -26,13 +24,11 @@ module.exports = {
       if (!reason)
         return interaction.reply({ content: "❌ Invalid ticket reason.", ephemeral: true });
 
-      // --- GHOST TICKET CHECK ---
       const existing = await Ticket.findOne({ guildId: interaction.guild.id, ownerId: interaction.user.id, closed: false });
       
       if (existing) {
           const channelExists = interaction.guild.channels.cache.get(existing.channelId);
           if (!channelExists) {
-             
               existing.closed = true;
               await existing.save();
           } else {
@@ -43,7 +39,6 @@ module.exports = {
           }
       }
 
-      /* OPEN MODAL */
       const modal = new Modal()
         .setCustomId(`ticket_modal_${selectedId}`)
         .setTitle("Create Ticket");
@@ -63,7 +58,6 @@ module.exports = {
       return interaction.showModal(modal);
     }
 
-    /* ================= MODAL SUBMIT (CREATE CHANNEL) ================= */
     if (interaction.isModalSubmit() && interaction.customId.startsWith("ticket_modal_")) {
       const reasonId = interaction.customId.replace("ticket_modal_", "");
       const userReason = interaction.fields.getTextInputValue("ticket_reason_input");
@@ -94,7 +88,6 @@ module.exports = {
         }
       );
 
-      // SAVE TO DB (With userReason and Names)
       const newTicket = new Ticket({
         guildId: interaction.guild.id,
         channelId: channel.id,
@@ -103,7 +96,8 @@ module.exports = {
         ownerUsername: interaction.user.username,
         reasonId,
         userReason,
-        closed: false
+        closed: false,
+        transcript: [] 
       });
       await newTicket.save();
 
@@ -138,7 +132,6 @@ module.exports = {
       });
     }
 
-    /* ================= CLAIM ================= */
     if (interaction.isButton() && interaction.customId === "ticket-claim") {
       const ticket = await Ticket.findOne({ channelId: interaction.channel.id });
 
@@ -178,21 +171,14 @@ module.exports = {
       return interaction.deferUpdate();
     }
 
-    /* ================= CLOSE ================= */
     if (interaction.isButton() && interaction.customId === "ticket-close") {
       const ticket = await Ticket.findOne({ channelId: interaction.channel.id });
 
-      // Only claimer can close logic
-      if (!ticket || (ticket.claimerId && ticket.claimerId !== interaction.user.id))
-        return interaction.reply({
-          content: "❌ Only the claimer can close this ticket.",
-          ephemeral: true
-        });
+      if (!ticket) return interaction.reply({ content: "Ticket not found in DB.", ephemeral: true });
 
       const config = await GuildConfig.findOne({ guildId: interaction.guild.id });
       const reason = config.reasons.find(r => r.id === ticket.reasonId);
 
-    
       if(reason.closeCategory) await interaction.channel.setParent(reason.closeCategory).catch(() => {});
       
       await interaction.channel.permissionOverwrites.edit(ticket.ownerId, {
@@ -210,7 +196,7 @@ module.exports = {
         embeds: [
           new MessageEmbed()
             .setTitle("🔒 Ticket Closed")
-            .setDescription(`Closed by <@${interaction.user.id}>`)
+            .setDescription(`Closed by <@${interaction.user.id}>. Click delete to save transcript to DB and remove channel.`)
             .setColor("RED")
         ],
         components: [row]
@@ -219,66 +205,56 @@ module.exports = {
       return interaction.deferUpdate();
     }
 
-    /* ================= DELETE + TRANSCRIPT ================= */
     if (interaction.isButton() && interaction.customId === "ticket-delete") {
       const ticket = await Ticket.findOne({ channelId: interaction.channel.id });
-      if (!ticket) return;
+      if (!ticket) return interaction.reply({ content: "Ticket DB entry not found.", ephemeral: true });
 
       const config = await GuildConfig.findOne({ guildId: interaction.guild.id });
       const reason = config.reasons.find(r => r.id === ticket.reasonId);
 
-      await interaction.reply({ content: "📑 Saving transcript...", ephemeral: true });
+      await interaction.reply({ content: "📑 Saving transcript to Database...", ephemeral: true });
 
-      const messages = await interaction.channel.messages.fetch({ limit: 100 });
+      let allMessages = [];
+      let lastId;
 
-      const transcript =
-        `Ticket Reason: ${ticket.userReason || "None"}\n\n` +
-        messages
-          .reverse()
-          .map(
-            m =>
-              `[${m.createdAt.toLocaleString()}] ${m.author.tag}: ${
-                m.content || "[Attachment / Embed]"
-              } ${m.attachments.first() ? m.attachments.first().url : ""}`
-          )
-          .join("\n");
+      while (true) {
+        const options = { limit: 100 };
+        if (lastId) options.before = lastId;
 
-      let transcriptUrl = "Error";
-      try {
-        const bin = await sourcebin.create(
-          [
-            {
-              name: `ticket-${interaction.channel.id}.txt`,
-              content: transcript,
-              languageId: "text"
-            }
-          ],
-          {
-            title: "Ticket Transcript",
-            description: interaction.channel.name
-          }
-        );
-        transcriptUrl = bin.url;
-      } catch(e) { console.log(e); }
+        const messages = await interaction.channel.messages.fetch(options);
+        allMessages.push(...messages.values());
+        lastId = messages.last()?.id;
+
+        if (messages.size !== 100) break;
+      }
+
+      const transcriptData = allMessages.reverse().map(m => ({
+          authorId: m.author.id,
+          authorTag: m.author.tag,
+          content: m.content,
+          timestamp: m.createdAt,
+          attachments: m.attachments.map(a => a.url),
+          embeds: m.embeds.length > 0
+      }));
+
+      ticket.transcript = transcriptData;
+      ticket.closed = true;
+      await ticket.save();
 
       const transcriptChannel = interaction.guild.channels.cache.get(reason.transcriptChannel);
       if (transcriptChannel) {
         transcriptChannel.send({
           embeds: [
             new MessageEmbed()
-              .setTitle("📄 Ticket Transcript")
+              .setTitle("📄 Ticket Deleted & Saved")
               .addField("Ticket", ticket.channelName || interaction.channel.name, true)
               .addField("Owner", `<@${ticket.ownerId}>`, true)
               .addField("Closed By", `<@${interaction.user.id}>`, true)
-              .addField("Transcript", `[Click Here](${transcriptUrl})`)
+              .setDescription("Transcript saved to Database. Check Dashboard.")
               .setColor(client.config.embedColor)
           ]
         });
       }
-
-      
-      ticket.transcript = transcriptUrl;
-      await ticket.save();
 
       setTimeout(() => interaction.channel.delete().catch(() => {}), 2000);
     }

@@ -10,7 +10,7 @@ const ticketSchema = new mongoose.Schema({
     reasonId: String,
     userReason: String, 
     closed: { type: Boolean, default: false },
-    transcript: { type: String, default: null },
+    transcript: { type: Array, default: [] },
     createdAt: { type: Date, default: Date.now }
 });
 

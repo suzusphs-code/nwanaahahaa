@@ -1,4 +1,4 @@
-const { loadConfig, saveConfig } = require("../../utils/ticketConfig");
+const GuildConfig = require("../../models/GuildConfig");
 
 module.exports = {
     name: "ticketedit",
@@ -19,6 +19,7 @@ module.exports = {
             choices: [
                 { name: "Label", value: "label" },
                 { name: "Description", value: "description" },
+                { name: "Question", value: "question" },
                 { name: "Add Staff Role", value: "addstaff" },
                 { name: "Remove Staff Role", value: "removestaff" },
                 { name: "Open Category", value: "opencategory" },
@@ -29,7 +30,7 @@ module.exports = {
         },
         {
             name: "value",
-            description: "New value (role/channel/text)",
+            description: "New value (text)",
             type: 3,
             required: false
         },
@@ -50,83 +51,110 @@ module.exports = {
     run: async (client, interaction) => {
         const reasonId = interaction.options.getString("reason");
         const field = interaction.options.getString("field");
-        const value = interaction.options.getString("value");
+        const textValue = interaction.options.getString("value");
         const role = interaction.options.getRole("role");
         const channel = interaction.options.getChannel("channel");
 
-        const data = loadConfig();
-        const guildId = interaction.guild.id;
+        const guildConfig = await GuildConfig.findOne({ guildId: interaction.guild.id });
 
-        if (!data.guilds[guildId]) {
+        if (!guildConfig || !guildConfig.reasons) {
             return interaction.reply({
-                content: "❌ No ticket system configured for this server.",
+                content: "❌ No ticket configuration found for this server.",
                 ephemeral: true
             });
         }
 
-        const reason = data.guilds[guildId].reasons.find(r => r.id === reasonId);
-        if (!reason) {
+        const reasonIndex = guildConfig.reasons.findIndex(r => r.id === reasonId);
+        if (reasonIndex === -1) {
             return interaction.reply({
-                content: "❌ Ticket reason not found.",
+                content: `❌ Ticket reason ID \`${reasonId}\` not found.`,
                 ephemeral: true
             });
         }
 
-        switch (field) {
-            case "label":
-                if (!value) return fail("Please provide a label.");
-                reason.label = value;
-                break;
+        const reason = guildConfig.reasons[reasonIndex];
+        let updated = false;
 
-            case "description":
-                if (!value) return fail("Please provide a description.");
-                reason.description = value;
-                break;
+        try {
+            switch (field) {
+                case "label":
+                    if (!textValue) return fail("Please provide a text value.");
+                    reason.label = textValue;
+                    updated = true;
+                    break;
 
-            case "addstaff":
-                if (!role) return fail("Please provide a role.");
-                if (!reason.staffRoles.includes(role.id)) {
-                    reason.staffRoles.push(role.id);
-                }
-                break;
+                case "description":
+                    if (!textValue) return fail("Please provide a text value.");
+                    reason.description = textValue;
+                    updated = true;
+                    break;
+                
+                case "question":
+                    if (!textValue) return fail("Please provide a text value.");
+                    reason.question = textValue;
+                    updated = true;
+                    break;
 
-            case "removestaff":
-                if (!role) return fail("Please provide a role.");
-                reason.staffRoles = reason.staffRoles.filter(r => r !== role.id);
-                break;
+                case "addstaff":
+                    if (!role) return fail("Please provide a role.");
+                    if (!reason.staffRoles.includes(role.id)) {
+                        reason.staffRoles.push(role.id);
+                        updated = true;
+                    }
+                    break;
 
-            case "opencategory":
-                if (!channel) return fail("Please provide a category.");
-                reason.openCategory = channel.id;
-                break;
+                case "removestaff":
+                    if (!role) return fail("Please provide a role.");
+                    reason.staffRoles = reason.staffRoles.filter(r => r !== role.id);
+                    updated = true;
+                    break;
 
-            case "closecategory":
-                if (!channel) return fail("Please provide a category.");
-                reason.closeCategory = channel.id;
-                break;
+                case "opencategory":
+                    if (!channel) return fail("Please provide a category.");
+                    reason.openCategory = channel.id;
+                    updated = true;
+                    break;
 
-            case "transcript":
-                if (!channel) return fail("Please provide a channel.");
-                reason.transcriptChannel = channel.id;
-                break;
+                case "closecategory":
+                    if (!channel) return fail("Please provide a category.");
+                    reason.closeCategory = channel.id;
+                    updated = true;
+                    break;
 
-            case "panel":
-                if (!channel) return fail("Please provide a channel.");
-                reason.panelChannel = channel.id;
-                data.guilds[guildId].panelChannel = channel.id;
-                break;
+                case "transcript":
+                    if (!channel) return fail("Please provide a channel.");
+                    reason.transcriptChannel = channel.id;
+                    updated = true;
+                    break;
+
+                case "panel":
+                    if (!channel) return fail("Please provide a channel.");
+                    reason.panelChannel = channel.id;
+                    guildConfig.panelChannel = channel.id;
+                    updated = true;
+                    break;
+            }
+
+            if (updated) {
+                guildConfig.reasons[reasonIndex] = reason;
+                guildConfig.markModified('reasons');
+                await guildConfig.save();
+
+                return interaction.reply({
+                    content: `✅ Ticket reason **${reasonId}** updated successfully in Database.`,
+                    ephemeral: true
+                });
+            } else {
+                return interaction.reply({ content: "❌ No changes made.", ephemeral: true });
+            }
+
+        } catch (err) {
+            console.error(err);
+            return interaction.reply({ content: "❌ An error occurred while saving to the database.", ephemeral: true });
         }
-
-        saveConfig(data);
-
-        return interaction.reply({
-            content: `✅ Ticket reason **${reasonId}** updated successfully.`,
-            ephemeral: true
-        });
 
         function fail(msg) {
             interaction.reply({ content: `❌ ${msg}`, ephemeral: true });
-            throw new Error("Invalid input");
         }
     }
 };
